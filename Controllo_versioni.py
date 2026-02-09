@@ -4,14 +4,16 @@ from datetime import datetime
 from openpyxl import Workbook
 from mysql.connector import Error
 from email.message import EmailMessage
+from dotenv import load_dotenv
 
+load_dotenv("/srv/Progetti_Pyhton/Versioni_Obsolete_Vision_One_prod/.Controllo_versioni.env")
 # Dichiarazione variabili di ambiente
 # Configurazione SMTP email (relay senza autenticazione, filtrato per IP)
 SMTP_SERVER    = os.getenv("SMTP_SERVER")
 SMTP_PORT     = int(os.getenv("SMTP_PORT"))
 SMTP_USER     = os.getenv("SMTP_USER")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-SMTP_STARTTLS  = os.getenv("SMTP_STARTTLS")
+SMTP_STARTTLS  = os.getenv("SMTP_STARTTLS").strip().lower() in {"0", "false", "no", "off"}
 EMAIL_FROM     = os.getenv("EMAIL_FROM")
 DESTINATARI    = os.getenv("DESTINATARI")
 DBUSER=os.getenv("USER")
