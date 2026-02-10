@@ -43,6 +43,10 @@ def send_email(
     - Nessun riepilogo fisso: il chiamante passa direttamente il testo LLM.
     """
     subject = subject.strip()
+    if isinstance(rcpt, str):
+        rcpt = [item.strip() for item in rcpt.split(",") if item.strip()]
+    if not rcpt:
+        raise ValueError("Nessun destinatario valido configurato per l'invio email")
 
     msg = EmailMessage()
     msg["From"]    = EMAIL_FROM
@@ -55,29 +59,30 @@ def send_email(
         msg.add_alternative(body_html, subtype="html")
     if attachments:
         for attachment_path in attachments:
-            try:
-                with open(attachment_path, "rb") as attachment_file:
-                    attachment_data = attachment_file.read()
-                filename = os.path.basename(attachment_path)
-                msg.add_attachment(
-                    attachment_data,
-                    maintype="application",
-                    subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    filename=filename,
-                )
-                with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=10) as server:
-                    server.ehlo()
-                    if SMTP_STARTTLS:
-                        context = ssl.create_default_context()
-                        try:
-                            context.load_verify_locations(cafile="/usr/local/share/ca-certificates/relay_chain.pem")
-                        except Exception:
-                            pass
-                        server.starttls(context=context)
-                        server.ehlo()
-                    server.send_message(msg)
-            except Exception as e:
-                logging.error(f"Errore invio e-mail: {e}", exc_info=True)
+            with open(attachment_path, "rb") as attachment_file:
+                attachment_data = attachment_file.read()
+            filename = os.path.basename(attachment_path)
+            msg.add_attachment(
+                attachment_data,
+                maintype="application",
+                subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                filename=filename,
+            )
+
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=timeout) as server:
+            server.ehlo()
+            if SMTP_STARTTLS:
+                context = ssl.create_default_context()
+                try:
+                    context.load_verify_locations(cafile="/usr/local/share/ca-certificates/relay_chain.pem")
+                except Exception:
+                    pass
+                server.starttls(context=context)
+                server.ehlo()
+            server.send_message(msg)
+    except Exception as e:
+        logging.error(f"Errore invio e-mail: {e}", exc_info=True)
 
 def connect_to_mysql():
     """Esegue la connessione al database MySQL e restituisce l'oggetto connection."""
@@ -177,10 +182,11 @@ def main():
             f"in allegato trovi il report versioni per il cliente {customer_name}.\n\n"
             f"Ciao"
         )
+        destinatari_list = [item.strip() for item in DESTINATARI.split(",") if item.strip()]
         send_email(
             email_subject,
             email_body,
-            rcpt=DESTINATARI,
+            rcpt=destinatari_list,
             attachments=[output_file],
         )
 
