@@ -40,7 +40,7 @@ def send_email(
     """Invia una email e ritorna True se il relay accetta almeno un destinatario."""
     subject = subject.strip()
     if isinstance(rcpt, str):
-        rcpt = [item.strip() for item in rcpt.replace(";", ",").split(",") if item.strip()]
+        rcpt = [item.strip() for item in rcpt.split(",") if item.strip()]
     if not rcpt:
         raise ValueError("Nessun destinatario valido configurato per l'invio email")
 
@@ -64,32 +64,20 @@ def send_email(
                 filename=filename,
             )
 
-    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=timeout) as server:
-        server.ehlo()
-        if SMTP_STARTTLS:
-            context = ssl.create_default_context()
-            if not SMTP_VERIFY_TLS:
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
-            else:
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=timeout) as server:
+            server.ehlo()
+            if SMTP_STARTTLS:
+                context = ssl.create_default_context()
                 try:
                     context.load_verify_locations(cafile="/usr/local/share/ca-certificates/relay_chain.pem")
                 except Exception:
-                    logging.warning("relay_chain.pem non caricato; uso i CA di sistema")
-            server.starttls(context=context)
-            server.ehlo()
-
-        if SMTP_USER and SMTP_PASSWORD:
-            server.login(SMTP_USER, SMTP_PASSWORD)
-
-        refused_recipients = server.send_message(msg)
-
-    if refused_recipients:
-        logging.error("Destinatari rifiutati dal relay: %s", refused_recipients)
-        return False
-
-    logging.info("E-mail accettata dal relay per destinatari: %s", ", ".join(rcpt))
-    return True
+                    pass
+                server.starttls(context=context)
+                server.ehlo()
+            server.send_message(msg)
+    except Exception as e:
+        logging.error(f"Errore invio e-mail: {e}", exc_info=True)
 
 def connect_to_mysql():
     """Esegue la connessione al database MySQL e restituisce l'oggetto connection."""
@@ -189,8 +177,8 @@ def main():
             f"in allegato trovi il report versioni per il cliente {customer_name}.\n\n"
             f"Ciao"
         )
-        destinatari_list = [item.strip() for item in (DESTINATARI or "").replace(";", ",").split(",") if item.strip()]
-        sent = send_email(
+        destinatari_list = [item.strip() for item in DESTINATARI.split(",") if item.strip()]
+        send_email(
             email_subject,
             email_body,
             rcpt=destinatari_list,
