@@ -7,13 +7,21 @@ from email.message import EmailMessage
 from dotenv import load_dotenv
 
 load_dotenv("/srv/Progetti_Pyhton/Versioni_Obsolete_Vision_One_prod/.Controllo_versioni.env")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 # Dichiarazione variabili di ambiente
 # Configurazione SMTP email (relay senza autenticazione, filtrato per IP)
 SMTP_SERVER    = os.getenv("SMTP_SERVER")
 SMTP_PORT     = int(os.getenv("SMTP_PORT"))
 SMTP_USER     = os.getenv("SMTP_USER")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-SMTP_STARTTLS  = os.getenv("SMTP_STARTTLS").strip().lower() in {"1", "true", "yes", "on"}
+SMTP_STARTTLS  = (os.getenv("SMTP_STARTTLS") or "").strip().lower() in {"1", "true", "yes", "on"}
+SMTP_VERIFY_TLS = (os.getenv("SMTP_VERIFY_TLS") or "1").strip().lower() in {"1", "true", "yes", "on"}
+SMTP_ALLOW_INSECURE_FALLBACK = (os.getenv("SMTP_ALLOW_INSECURE_FALLBACK") or "1").strip().lower() in {"1", "true", "yes", "on"}
+SMTP_MODE      = (os.getenv("SMTP_MODE") or "auto").strip().lower()  # auto|starttls|ssl|plain
+SMTP_TIMEOUT   = int((os.getenv("SMTP_TIMEOUT") or "20").strip())
+SMTP_DEBUG     = (os.getenv("SMTP_DEBUG") or "0").strip().lower() in {"1", "true", "yes", "on"}
+SMTP_CA_FILE   = (os.getenv("SMTP_CA_FILE") or "/usr/local/share/ca-certificates/relay_chain.pem").strip()
+SMTP_ENVELOPE_FROM = (os.getenv("SMTP_ENVELOPE_FROM") or "").strip()
 EMAIL_FROM     = os.getenv("EMAIL_FROM")
 DESTINATARI    = os.getenv("DESTINATARI")
 DBUSER=os.getenv("USER")
@@ -27,57 +35,109 @@ DB_CONFIG = {
     "autocommit":  False
 }
 
+def _build_tls_context(verify_tls: bool) -> ssl.SSLContext:
+    context = ssl.create_default_context()
+    if not verify_tls:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        return context
+
+    if SMTP_CA_FILE and os.path.exists(SMTP_CA_FILE):
+        context.load_verify_locations(cafile=SMTP_CA_FILE)
+    else:
+        logging.warning("CA file non trovato (%s); uso i CA di sistema", SMTP_CA_FILE)
+    return context
+
+
+def _resolve_smtp_mode() -> str:
+    if SMTP_MODE in {"starttls", "ssl", "plain"}:
+        return SMTP_MODE
+    if SMTP_PORT == 465:
+        return "ssl"
+    if SMTP_PORT in {587, 25}:
+        return "starttls" if SMTP_STARTTLS else "plain"
+    return "plain"
+
+
 def send_email(
     subject: str,
     body_text: str,
     *,
-    rcpt: list[str],
+    rcpt: list[str] | str,
     body_html: str | None = None,
     attachments: list[str] | None = None,
-    timeout: int = 10,
+    timeout: int = SMTP_TIMEOUT,
 ):
-    """
-    Invia email multipart/alternative:
-    - Plain text (fallback) + opzionale HTML.
-    - Aggiunge un banner prima del testo di ogni email (rosso in HTML).
-    - Nessun riepilogo fisso: il chiamante passa direttamente il testo LLM.
-    """
+    """Invia una email e ritorna True se il relay accetta almeno un destinatario."""
     subject = subject.strip()
+    if isinstance(rcpt, str):
+        rcpt = [item.strip() for item in rcpt.replace(";", ",").split(",") if item.strip()]
+    if not SMTP_SERVER or not SMTP_PORT:
+        raise ValueError("SMTP_SERVER/SMTP_PORT non configurati")
+    if not EMAIL_FROM:
+        raise ValueError("EMAIL_FROM non configurato")
+    if not rcpt:
+        raise ValueError("Nessun destinatario valido configurato per l'invio email")
 
     msg = EmailMessage()
-    msg["From"]    = EMAIL_FROM
-    msg["To"]      = ", ".join(rcpt)
+    msg["From"] = EMAIL_FROM
+    msg["To"] = ", ".join(rcpt)
     msg["Subject"] = subject
- 
-    # Plain text
+
     msg.set_content(body_text, subtype="plain", charset="utf-8")
     if body_html:
         msg.add_alternative(body_html, subtype="html")
     if attachments:
         for attachment_path in attachments:
-            try:
-                with open(attachment_path, "rb") as attachment_file:
-                    attachment_data = attachment_file.read()
-                filename = os.path.basename(attachment_path)
-                msg.add_attachment(
-                    attachment_data,
-                    maintype="application",
-                    subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    filename=filename,
-                )
-                with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=10) as server:
-                    server.ehlo()
-                    if SMTP_STARTTLS:
-                        context = ssl.create_default_context()
-                        try:
-                            context.load_verify_locations(cafile="/usr/local/share/ca-certificates/relay_chain.pem")
-                        except Exception:
-                            pass
-                        server.starttls(context=context)
-                        server.ehlo()
-                    server.send_message(msg)
-            except Exception as e:
-                logging.error(f"Errore invio e-mail: {e}", exc_info=True)
+            with open(attachment_path, "rb") as attachment_file:
+                attachment_data = attachment_file.read()
+            filename = os.path.basename(attachment_path)
+            msg.add_attachment(
+                attachment_data,
+                maintype="application",
+                subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                filename=filename,
+            )
+
+    mode = _resolve_smtp_mode()
+    envelope_from = SMTP_ENVELOPE_FROM or EMAIL_FROM
+
+    def _send_once(verify_tls: bool):
+        if mode == "ssl":
+            context = _build_tls_context(verify_tls)
+            server_ctx = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=timeout, context=context)
+        else:
+            server_ctx = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=timeout)
+
+        with server_ctx as server:
+            if SMTP_DEBUG:
+                server.set_debuglevel(1)
+            server.ehlo()
+
+            if mode == "starttls":
+                tls_context = _build_tls_context(verify_tls)
+                server.starttls(context=tls_context)
+                server.ehlo()
+
+            if SMTP_USER and SMTP_PASSWORD:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+
+            return server.send_message(msg, from_addr=envelope_from, to_addrs=rcpt)
+
+    try:
+        refused_recipients = _send_once(SMTP_VERIFY_TLS)
+    except ssl.SSLError:
+        if not SMTP_VERIFY_TLS or not SMTP_ALLOW_INSECURE_FALLBACK:
+            raise
+        logging.warning("Errore verifica TLS; ritento con verifica disabilitata")
+        refused_recipients = _send_once(False)
+
+    if refused_recipients:
+        logging.error("Destinatari rifiutati dal relay: %s", refused_recipients)
+        return False
+
+    logging.info("E-mail accettata dal relay per destinatari: %s", ", ".join(rcpt))
+    return True
 
 def connect_to_mysql():
     """Esegue la connessione al database MySQL e restituisce l'oggetto connection."""
@@ -177,12 +237,18 @@ def main():
             f"in allegato trovi il report versioni per il cliente {customer_name}.\n\n"
             f"Ciao"
         )
-        send_email(
-            email_subject,
-            email_body,
-            rcpt=DESTINATARI,
-            attachments=[output_file],
-        )
+        destinatari_list = [item.strip() for item in (DESTINATARI or "").replace(";", ",").split(",") if item.strip()]
+        try:
+            sent = send_email(
+                email_subject,
+                email_body,
+                rcpt=destinatari_list,
+                attachments=[output_file],
+            )
+            if not sent:
+                print(f"ATTENZIONE: e-mail non consegnata dal relay per {customer_name}")
+        except Exception as e:
+            logging.error("Errore invio e-mail per %s: %s", customer_name, e, exc_info=True)
 
     conn.close()
 
