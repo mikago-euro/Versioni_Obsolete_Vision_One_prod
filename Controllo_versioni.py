@@ -35,30 +35,24 @@ def send_email(
     body_html: str | None = None,
     attachments: list[str] | None = None,
     timeout: int = 10,
-) -> None:
+):
     """
-    Invia una e-mail usando il relay configurato, con autenticazione SMTP.
-    Usa i parametri globali:
-      - SMTP_SERVER, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_STARTTLS
-      - EMAIL_FROM
-    `rcpt` è una lista di indirizzi (es. recipients_for_cliente(...)).
-    body_text = versione plain-text
-    body_html = versione HTML (opzionale)
+    Invia email multipart/alternative:
+    - Plain text (fallback) + opzionale HTML.
+    - Aggiunge un banner prima del testo di ogni email (rosso in HTML).
+    - Nessun riepilogo fisso: il chiamante passa direttamente il testo LLM.
     """
-
-    # Prefisso standard SOC-AI nell'oggetto
     subject = subject.strip()
 
-    # Costruzione messaggio
     msg = EmailMessage()
-    msg["From"] = EMAIL_FROM
-    msg["To"] = ", ".join(rcpt)
+    msg["From"]    = EMAIL_FROM
+    msg["To"]      = ", ".join(rcpt)
     msg["Subject"] = subject
-
-    msg.set_content(body_text)
+ 
+    # Plain text
+    msg.set_content(body_text, subtype="plain", charset="utf-8")
     if body_html:
         msg.add_alternative(body_html, subtype="html")
-
     if attachments:
         for attachment_path in attachments:
             try:
@@ -71,34 +65,19 @@ def send_email(
                     subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     filename=filename,
                 )
-            except OSError as exc:
-                logging.error(f"Impossibile allegare {attachment_path}: {exc}")
-
-    try:
-        # Contesto TLS
-        context = ssl.create_default_context()
-        # Se hai il file con la catena, lo carichi (se manca, ignori l'errore)
-        try:
-            context.load_verify_locations(cafile="/home/euro/relay_chain.pem")
-        except Exception:
-            pass
- 
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=timeout) as server:
-            server.ehlo()
- 
-            # STARTTLS opzionale in base a SMTP_STARTTLS
-            if SMTP_STARTTLS:
-                server.starttls(context=context)
-                server.ehlo()
- 
-            # Autenticazione (user+password)
-            if SMTP_USER and SMTP_PASSWORD:
-                server.login(SMTP_USER, SMTP_PASSWORD)
- 
-            server.send_message(msg)
- 
-    except Exception as e:
-        logging.error(f"Errore invio e-mail: {e}", exc_info=True)
+                with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=10) as server:
+                    server.ehlo()
+                    if SMTP_STARTTLS:
+                        context = ssl.create_default_context()
+                        try:
+                            context.load_verify_locations(cafile="/usr/local/share/ca-certificates/relay_chain.pem")
+                        except Exception:
+                            pass
+                        server.starttls(context=context)
+                        server.ehlo()
+                    server.send_message(msg)
+            except Exception as e:
+                logging.error(f"Errore invio e-mail: {e}", exc_info=True)
 
 def connect_to_mysql():
     """Esegue la connessione al database MySQL e restituisce l'oggetto connection."""
