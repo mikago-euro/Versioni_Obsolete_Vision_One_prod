@@ -13,7 +13,8 @@ SMTP_SERVER    = os.getenv("SMTP_SERVER")
 SMTP_PORT     = int(os.getenv("SMTP_PORT"))
 SMTP_USER     = os.getenv("SMTP_USER")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-SMTP_STARTTLS  = os.getenv("SMTP_STARTTLS").strip().lower() in {"1", "true", "yes", "on"}
+SMTP_STARTTLS  = (os.getenv("SMTP_STARTTLS") or "").strip().lower() in {"1", "true", "yes", "on"}
+SMTP_VERIFY_TLS = (os.getenv("SMTP_VERIFY_TLS") or "1").strip().lower() in {"1", "true", "yes", "on"}
 EMAIL_FROM     = os.getenv("EMAIL_FROM")
 DESTINATARI    = os.getenv("DESTINATARI")
 DBUSER=os.getenv("USER")
@@ -31,17 +32,12 @@ def send_email(
     subject: str,
     body_text: str,
     *,
-    rcpt: list[str],
+    rcpt: list[str] | str,
     body_html: str | None = None,
     attachments: list[str] | None = None,
     timeout: int = 10,
 ):
-    """
-    Invia email multipart/alternative:
-    - Plain text (fallback) + opzionale HTML.
-    - Aggiunge un banner prima del testo di ogni email (rosso in HTML).
-    - Nessun riepilogo fisso: il chiamante passa direttamente il testo LLM.
-    """
+    """Invia una email e ritorna True se il relay accetta almeno un destinatario."""
     subject = subject.strip()
     if isinstance(rcpt, str):
         rcpt = [item.strip() for item in rcpt.split(",") if item.strip()]
@@ -49,11 +45,10 @@ def send_email(
         raise ValueError("Nessun destinatario valido configurato per l'invio email")
 
     msg = EmailMessage()
-    msg["From"]    = EMAIL_FROM
-    msg["To"]      = ", ".join(rcpt)
+    msg["From"] = EMAIL_FROM
+    msg["To"] = ", ".join(rcpt)
     msg["Subject"] = subject
- 
-    # Plain text
+
     msg.set_content(body_text, subtype="plain", charset="utf-8")
     if body_html:
         msg.add_alternative(body_html, subtype="html")
@@ -189,6 +184,8 @@ def main():
             rcpt=destinatari_list,
             attachments=[output_file],
         )
+        if not sent:
+            print(f"ATTENZIONE: e-mail non consegnata dal relay per {customer_name}")
 
     conn.close()
 
