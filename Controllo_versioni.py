@@ -7,13 +7,21 @@ from email.message import EmailMessage
 from dotenv import load_dotenv
 
 load_dotenv("/srv/Progetti_Pyhton/Versioni_Obsolete_Vision_One_prod/.Controllo_versioni.env")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 # Dichiarazione variabili di ambiente
 # Configurazione SMTP email (relay senza autenticazione, filtrato per IP)
 SMTP_SERVER    = os.getenv("SMTP_SERVER")
 SMTP_PORT     = int(os.getenv("SMTP_PORT"))
 SMTP_USER     = os.getenv("SMTP_USER")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-SMTP_STARTTLS  = os.getenv("SMTP_STARTTLS").strip().lower() in {"1", "true", "yes", "on"}
+SMTP_STARTTLS  = (os.getenv("SMTP_STARTTLS") or "").strip().lower() in {"1", "true", "yes", "on"}
+SMTP_VERIFY_TLS = (os.getenv("SMTP_VERIFY_TLS") or "1").strip().lower() in {"1", "true", "yes", "on"}
+SMTP_ALLOW_INSECURE_FALLBACK = (os.getenv("SMTP_ALLOW_INSECURE_FALLBACK") or "1").strip().lower() in {"1", "true", "yes", "on"}
+SMTP_MODE      = (os.getenv("SMTP_MODE") or "auto").strip().lower()  # auto|starttls|ssl|plain
+SMTP_TIMEOUT   = int((os.getenv("SMTP_TIMEOUT") or "20").strip())
+SMTP_DEBUG     = (os.getenv("SMTP_DEBUG") or "0").strip().lower() in {"1", "true", "yes", "on"}
+SMTP_CA_FILE   = (os.getenv("SMTP_CA_FILE") or "/usr/local/share/ca-certificates/relay_chain.pem").strip()
+SMTP_ENVELOPE_FROM = (os.getenv("SMTP_ENVELOPE_FROM") or "").strip()
 EMAIL_FROM     = os.getenv("EMAIL_FROM")
 DESTINATARI    = os.getenv("DESTINATARI")
 DBUSER=os.getenv("USER")
@@ -27,21 +35,40 @@ DB_CONFIG = {
     "autocommit":  False
 }
 
+def _build_tls_context(verify_tls: bool) -> ssl.SSLContext:
+    context = ssl.create_default_context()
+    if not verify_tls:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        return context
+
+    if SMTP_CA_FILE and os.path.exists(SMTP_CA_FILE):
+        context.load_verify_locations(cafile=SMTP_CA_FILE)
+    else:
+        logging.warning("CA file non trovato (%s); uso i CA di sistema", SMTP_CA_FILE)
+    return context
+
+
+def _resolve_smtp_mode() -> str:
+    if SMTP_MODE in {"starttls", "ssl", "plain"}:
+        return SMTP_MODE
+    if SMTP_PORT == 465:
+        return "ssl"
+    if SMTP_PORT in {587, 25}:
+        return "starttls" if SMTP_STARTTLS else "plain"
+    return "plain"
+
+
 def send_email(
     subject: str,
     body_text: str,
     *,
-    rcpt: list[str],
+    rcpt: list[str] | str,
     body_html: str | None = None,
     attachments: list[str] | None = None,
-    timeout: int = 10,
+    timeout: int = SMTP_TIMEOUT,
 ):
-    """
-    Invia email multipart/alternative:
-    - Plain text (fallback) + opzionale HTML.
-    - Aggiunge un banner prima del testo di ogni email (rosso in HTML).
-    - Nessun riepilogo fisso: il chiamante passa direttamente il testo LLM.
-    """
+    """Invia una email e ritorna True se il relay accetta almeno un destinatario."""
     subject = subject.strip()
     if isinstance(rcpt, str):
         rcpt = [item.strip() for item in rcpt.split(",") if item.strip()]
@@ -49,11 +76,10 @@ def send_email(
         raise ValueError("Nessun destinatario valido configurato per l'invio email")
 
     msg = EmailMessage()
-    msg["From"]    = EMAIL_FROM
-    msg["To"]      = ", ".join(rcpt)
+    msg["From"] = EMAIL_FROM
+    msg["To"] = ", ".join(rcpt)
     msg["Subject"] = subject
- 
-    # Plain text
+
     msg.set_content(body_text, subtype="plain", charset="utf-8")
     if body_html:
         msg.add_alternative(body_html, subtype="html")
