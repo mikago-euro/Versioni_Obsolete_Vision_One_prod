@@ -71,11 +71,7 @@ def send_email(
     """Invia una email e ritorna True se il relay accetta almeno un destinatario."""
     subject = subject.strip()
     if isinstance(rcpt, str):
-        rcpt = [item.strip() for item in rcpt.replace(";", ",").split(",") if item.strip()]
-    if not SMTP_SERVER or not SMTP_PORT:
-        raise ValueError("SMTP_SERVER/SMTP_PORT non configurati")
-    if not EMAIL_FROM:
-        raise ValueError("EMAIL_FROM non configurato")
+        rcpt = [item.strip() for item in rcpt.split(",") if item.strip()]
     if not rcpt:
         raise ValueError("Nessun destinatario valido configurato per l'invio email")
 
@@ -99,45 +95,20 @@ def send_email(
                 filename=filename,
             )
 
-    mode = _resolve_smtp_mode()
-    envelope_from = SMTP_ENVELOPE_FROM or EMAIL_FROM
-
-    def _send_once(verify_tls: bool):
-        if mode == "ssl":
-            context = _build_tls_context(verify_tls)
-            server_ctx = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=timeout, context=context)
-        else:
-            server_ctx = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=timeout)
-
-        with server_ctx as server:
-            if SMTP_DEBUG:
-                server.set_debuglevel(1)
-            server.ehlo()
-
-            if mode == "starttls":
-                tls_context = _build_tls_context(verify_tls)
-                server.starttls(context=tls_context)
-                server.ehlo()
-
-            if SMTP_USER and SMTP_PASSWORD:
-                server.login(SMTP_USER, SMTP_PASSWORD)
-
-            return server.send_message(msg, from_addr=envelope_from, to_addrs=rcpt)
-
     try:
-        refused_recipients = _send_once(SMTP_VERIFY_TLS)
-    except ssl.SSLError:
-        if not SMTP_VERIFY_TLS or not SMTP_ALLOW_INSECURE_FALLBACK:
-            raise
-        logging.warning("Errore verifica TLS; ritento con verifica disabilitata")
-        refused_recipients = _send_once(False)
-
-    if refused_recipients:
-        logging.error("Destinatari rifiutati dal relay: %s", refused_recipients)
-        return False
-
-    logging.info("E-mail accettata dal relay per destinatari: %s", ", ".join(rcpt))
-    return True
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=timeout) as server:
+            server.ehlo()
+            if SMTP_STARTTLS:
+                context = ssl.create_default_context()
+                try:
+                    context.load_verify_locations(cafile="/usr/local/share/ca-certificates/relay_chain.pem")
+                except Exception:
+                    pass
+                server.starttls(context=context)
+                server.ehlo()
+            server.send_message(msg)
+    except Exception as e:
+        logging.error(f"Errore invio e-mail: {e}", exc_info=True)
 
 def connect_to_mysql():
     """Esegue la connessione al database MySQL e restituisce l'oggetto connection."""
@@ -237,18 +208,13 @@ def main():
             f"in allegato trovi il report versioni per il cliente {customer_name}.\n\n"
             f"Ciao"
         )
-        destinatari_list = [item.strip() for item in (DESTINATARI or "").replace(";", ",").split(",") if item.strip()]
-        try:
-            sent = send_email(
-                email_subject,
-                email_body,
-                rcpt=destinatari_list,
-                attachments=[output_file],
-            )
-            if not sent:
-                print(f"ATTENZIONE: e-mail non consegnata dal relay per {customer_name}")
-        except Exception as e:
-            logging.error("Errore invio e-mail per %s: %s", customer_name, e, exc_info=True)
+        destinatari_list = [item.strip() for item in DESTINATARI.split(",") if item.strip()]
+        send_email(
+            email_subject,
+            email_body,
+            rcpt=destinatari_list,
+            attachments=[output_file],
+        )
 
     conn.close()
 
