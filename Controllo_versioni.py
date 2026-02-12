@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, mysql.connector, sys, smtplib, logging, ssl
+import os, mysql.connector, sys, smtplib, logging, ssl, json
 from datetime import datetime
 from openpyxl import Workbook
 from mysql.connector import Error
@@ -63,6 +63,39 @@ def _resolve_smtp_mode() -> str:
     return "plain"
 
 
+def _parse_recipients(raw_recipients: list[str] | str | None) -> list[str]:
+    """Normalizza i destinatari supportando CSV e array JSON-like."""
+    if raw_recipients is None:
+        return []
+
+    if isinstance(raw_recipients, list):
+        candidates = raw_recipients
+    else:
+        raw_text = str(raw_recipients).strip()
+        if not raw_text:
+            return []
+
+        candidates = None
+        if raw_text.startswith("[") and raw_text.endswith("]"):
+            try:
+                parsed = json.loads(raw_text)
+                if isinstance(parsed, list):
+                    candidates = parsed
+            except json.JSONDecodeError:
+                candidates = None
+
+        if candidates is None:
+            normalized = raw_text.replace(";", ",").replace("[", "").replace("]", "")
+            candidates = normalized.split(",")
+
+    cleaned: list[str] = []
+    for item in candidates:
+        recipient = str(item).strip().strip('\"').strip("'")
+        if recipient:
+            cleaned.append(recipient)
+    return cleaned
+
+
 def send_email(
     subject: str,
     body_text: str,
@@ -74,8 +107,7 @@ def send_email(
 ):
     """Invia una email e ritorna True se il relay accetta almeno un destinatario."""
     subject = subject.strip()
-    if isinstance(rcpt, str):
-        rcpt = [item.strip() for item in rcpt.replace(";", ",").split(",") if item.strip()]
+    rcpt = _parse_recipients(rcpt)
     if not SMTP_SERVER or not SMTP_PORT:
         raise ValueError("SMTP_SERVER/SMTP_PORT non configurati")
     if not EMAIL_FROM:
@@ -153,6 +185,21 @@ def send_email(
 
     if refused_recipients:
         logging.error("Destinatari rifiutati dal relay: %s", refused_recipients)
+        for recipient, smtp_error in refused_recipients.items():
+            try:
+                smtp_code, smtp_message = smtp_error
+            except Exception:
+                smtp_code, smtp_message = "?", smtp_error
+
+            if isinstance(smtp_message, bytes):
+                smtp_message = smtp_message.decode("utf-8", errors="replace")
+
+            logging.error(
+                "Dettaglio destinatario rifiutato: %s -> codice=%s messaggio=%s",
+                recipient,
+                smtp_code,
+                smtp_message,
+            )
         return False
 
     logging.info("E-mail accettata dal relay per destinatari: %s", ", ".join(rcpt))
@@ -176,7 +223,6 @@ def main():
     
     customers_query = "SELECT customer_name, api_url FROM customers"
     cursor = conn.cursor()
-    print(f"customers_query: {customers_query}")
     cursor.execute(customers_query)
     customers = cursor.fetchall()
     cursor.close()
@@ -194,7 +240,6 @@ def main():
         agents_query = (
             "SELECT DISTINCT clientProgram FROM agents WHERE api_url = %s ORDER BY clientProgram DESC"
         )
-        print(f"agents_query: {agents_query} params: {(api_key,)}")
         cursor.execute(agents_query, (api_key,))
         rows = cursor.fetchall()
         cursor.close()
@@ -208,12 +253,7 @@ def main():
             return tuple(int(part) for part in parts)
 
         client_programs = sorted({row[0] for row in rows if row[0] is not None}, key=version_key)
-        print(f"Versioni trovate per {customer_name}: {', '.join(client_programs)}")
         highest_three_client_programs = client_programs[-3:] if len(client_programs) >= 3 else client_programs
-        print(
-            f"Versioni escluse per {customer_name}: "
-            f"{', '.join(highest_three_client_programs) if highest_three_client_programs else 'Nessuna'}"
-        )
         placeholders = ", ".join(["%s"] * len(highest_three_client_programs))
         exclusions_clause = f"AND clientProgram NOT IN ({placeholders})" if placeholders else ""
         details_query = (
@@ -224,7 +264,6 @@ def main():
 
         cursor = conn.cursor()
         params = (api_key, *highest_three_client_programs)
-        print(f"details_query: {details_query} params: {params}")
         cursor.execute(details_query, params)
         details_rows = cursor.fetchall()
         cursor.close()
@@ -256,7 +295,7 @@ def main():
             f"in allegato trovi il report versioni per il cliente {customer_name}.\n\n"
             f"Ciao"
         )
-        destinatari_list = [item.strip() for item in (DESTINATARI or "").replace(";", ",").split(",") if item.strip()]
+        destinatari_list = _parse_recipients(DESTINATARI)
         try:
             sent = send_email(
                 email_subject,
@@ -265,7 +304,10 @@ def main():
                 attachments=[output_file],
             )
             if not sent:
-                print(f"ATTENZIONE: e-mail non consegnata dal relay per {customer_name}")
+                print(
+                    f"ATTENZIONE: e-mail non consegnata completamente dal relay per {customer_name}. "
+                    "Controlla i log 'Destinatari rifiutati' per codice e motivo SMTP."
+                )
         except Exception as e:
             logging.error("Errore invio e-mail per %s: %s", customer_name, e, exc_info=True)
 
