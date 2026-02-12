@@ -153,6 +153,21 @@ def send_email(
 
     if refused_recipients:
         logging.error("Destinatari rifiutati dal relay: %s", refused_recipients)
+        for recipient, smtp_error in refused_recipients.items():
+            try:
+                smtp_code, smtp_message = smtp_error
+            except Exception:
+                smtp_code, smtp_message = "?", smtp_error
+
+            if isinstance(smtp_message, bytes):
+                smtp_message = smtp_message.decode("utf-8", errors="replace")
+
+            logging.error(
+                "Dettaglio destinatario rifiutato: %s -> codice=%s messaggio=%s",
+                recipient,
+                smtp_code,
+                smtp_message,
+            )
         return False
 
     logging.info("E-mail accettata dal relay per destinatari: %s", ", ".join(rcpt))
@@ -265,7 +280,10 @@ def main():
                 attachments=[output_file],
             )
             if not sent:
-                print(f"ATTENZIONE: e-mail non consegnata dal relay per {customer_name}")
+                print(
+                    f"ATTENZIONE: e-mail non consegnata completamente dal relay per {customer_name}. "
+                    "Controlla i log 'Destinatari rifiutati' per codice e motivo SMTP."
+                )
         except Exception as e:
             logging.error("Errore invio e-mail per %s: %s", customer_name, e, exc_info=True)
 
