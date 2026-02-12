@@ -22,7 +22,7 @@ SMTP_TIMEOUT   = int((os.getenv("SMTP_TIMEOUT") or "20").strip())
 SMTP_CA_FILE   = (os.getenv("SMTP_CA_FILE") or "/usr/local/share/ca-certificates/relay_chain.pem").strip()
 SMTP_ENVELOPE_FROM = (os.getenv("SMTP_ENVELOPE_FROM") or "").strip()
 EMAIL_FROM     = os.getenv("EMAIL_FROM")
-DESTINATARI    = os.getenv("DESTINATARI")
+DESTINATARI    = os.getenv("EMAIL_TO_JSON")
 DBUSER=os.getenv("USER")
 DBNAME=os.getenv("DATABASE")
 
