@@ -26,6 +26,8 @@ DESTINATARI    = os.getenv("DESTINATARI")
 DBUSER=os.getenv("USER")
 DBNAME=os.getenv("DATABASE")
 
+#77 Commento test
+
 
 # Configurazione MySQL database
 DB_CONFIG = {
