@@ -223,7 +223,6 @@ def main():
     
     customers_query = "SELECT customer_name, api_url FROM customers"
     cursor = conn.cursor()
-    print(f"customers_query: {customers_query}")
     cursor.execute(customers_query)
     customers = cursor.fetchall()
     cursor.close()
@@ -241,7 +240,6 @@ def main():
         agents_query = (
             "SELECT DISTINCT clientProgram FROM agents WHERE api_url = %s ORDER BY clientProgram DESC"
         )
-        print(f"agents_query: {agents_query} params: {(api_key,)}")
         cursor.execute(agents_query, (api_key,))
         rows = cursor.fetchall()
         cursor.close()
@@ -255,12 +253,7 @@ def main():
             return tuple(int(part) for part in parts)
 
         client_programs = sorted({row[0] for row in rows if row[0] is not None}, key=version_key)
-        print(f"Versioni trovate per {customer_name}: {', '.join(client_programs)}")
         highest_three_client_programs = client_programs[-3:] if len(client_programs) >= 3 else client_programs
-        print(
-            f"Versioni escluse per {customer_name}: "
-            f"{', '.join(highest_three_client_programs) if highest_three_client_programs else 'Nessuna'}"
-        )
         placeholders = ", ".join(["%s"] * len(highest_three_client_programs))
         exclusions_clause = f"AND clientProgram NOT IN ({placeholders})" if placeholders else ""
         details_query = (
@@ -271,7 +264,6 @@ def main():
 
         cursor = conn.cursor()
         params = (api_key, *highest_three_client_programs)
-        print(f"details_query: {details_query} params: {params}")
         cursor.execute(details_query, params)
         details_rows = cursor.fetchall()
         cursor.close()
