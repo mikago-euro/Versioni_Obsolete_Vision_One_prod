@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, mysql.connector, sys, smtplib, logging, ssl, json
+import os, mysql.connector, sys, smtplib, logging, ssl, json, ast
 from datetime import datetime
 from openpyxl import Workbook
 from mysql.connector import Error
@@ -116,7 +116,7 @@ def _parse_recipients(raw_recipients: list[str] | str | None) -> list[str]:
 
 
 def _resolve_recipients_for_customer(raw_recipients: str | None, customer_name: str) -> list[str]:
-    """Restituisce i destinatari per cliente da JSON object o fallback statico."""
+    """Restituisce i destinatari per cliente da mapping (JSON/Python dict) o fallback statico."""
     if raw_recipients is None:
         return []
 
@@ -124,16 +124,31 @@ def _resolve_recipients_for_customer(raw_recipients: str | None, customer_name: 
     if not raw_text:
         return []
 
+    def _extract_from_mapping(mapping: dict) -> list[str]:
+        customer_map = {str(key).strip().lower(): value for key, value in mapping.items()}
+        customer_recipients = customer_map.get(str(customer_name).strip().lower())
+        if customer_recipients is None:
+            return []
+        return _parse_recipients(customer_recipients)
+
+    is_mapping_like = raw_text.startswith("{") and raw_text.endswith("}")
+
     try:
         parsed = json.loads(raw_text)
         if isinstance(parsed, dict):
-            customer_map = {str(key).strip().lower(): value for key, value in parsed.items()}
-            customer_recipients = customer_map.get(str(customer_name).strip().lower())
-            if customer_recipients is None:
-                return []
-            return _parse_recipients(customer_recipients)
+            return _extract_from_mapping(parsed)
     except json.JSONDecodeError:
-        logging.warning("DESTINATARI non contiene JSON valido, uso il parsing statico")
+        if is_mapping_like:
+            try:
+                parsed_literal = ast.literal_eval(raw_text)
+                if isinstance(parsed_literal, dict):
+                    return _extract_from_mapping(parsed_literal)
+            except (ValueError, SyntaxError):
+                logging.warning(
+                    "DESTINATARI sembra una mappa cliente ma non è valida (JSON/Python dict). Invio saltato per %s.",
+                    customer_name,
+                )
+                return []
 
     return _parse_recipients(raw_text)
 
