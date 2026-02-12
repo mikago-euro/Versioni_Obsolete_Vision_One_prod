@@ -7,7 +7,7 @@ from email.message import EmailMessage
 from dotenv import load_dotenv
 
 load_dotenv("/srv/Progetti_Pyhton/Versioni_Obsolete_Vision_One_prod/.Controllo_versioni.env")
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stdout, force=True)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stdout, force=True)
 # Dichiarazione variabili di ambiente
 # Configurazione SMTP email (relay senza autenticazione, filtrato per IP)
 SMTP_SERVER    = os.getenv("SMTP_SERVER")
@@ -19,7 +19,6 @@ SMTP_VERIFY_TLS = (os.getenv("SMTP_VERIFY_TLS") or "1").strip().lower() in {"1",
 SMTP_ALLOW_INSECURE_FALLBACK = (os.getenv("SMTP_ALLOW_INSECURE_FALLBACK") or "1").strip().lower() in {"1", "true", "yes", "on"}
 SMTP_MODE      = (os.getenv("SMTP_MODE") or "auto").strip().lower()  # auto|starttls|ssl|plain
 SMTP_TIMEOUT   = int((os.getenv("SMTP_TIMEOUT") or "20").strip())
-SMTP_DEBUG     = (os.getenv("SMTP_DEBUG") or "1").strip().lower() in {"1", "true", "yes", "on"}
 SMTP_CA_FILE   = (os.getenv("SMTP_CA_FILE") or "/usr/local/share/ca-certificates/relay_chain.pem").strip()
 SMTP_ENVELOPE_FROM = (os.getenv("SMTP_ENVELOPE_FROM") or "").strip()
 EMAIL_FROM     = os.getenv("EMAIL_FROM")
@@ -27,9 +26,6 @@ DESTINATARI    = os.getenv("DESTINATARI")
 DBUSER=os.getenv("USER")
 DBNAME=os.getenv("DATABASE")
 
-logging.debug("SMTP config: server=%s port=%s mode=%s starttls=%s verify_tls=%s debug=%s ca_file=%s envelope_from=%s from=%s destinatari=%s",
-    SMTP_SERVER, SMTP_PORT, SMTP_MODE, SMTP_STARTTLS, SMTP_VERIFY_TLS, SMTP_DEBUG, SMTP_CA_FILE,
-    SMTP_ENVELOPE_FROM or "<header_from>", EMAIL_FROM, DESTINATARI)
 
 # Configurazione MySQL database
 DB_CONFIG = {
@@ -137,8 +133,6 @@ def send_email(
 
     mode = _resolve_smtp_mode()
     envelope_from = SMTP_ENVELOPE_FROM or EMAIL_FROM
-    logging.debug("Preparazione invio email: subject=%s from_header=%s envelope_from=%s rcpt=%s attachments=%s mode=%s timeout=%s",
-                  subject, EMAIL_FROM, envelope_from, rcpt, attachments or [], mode, timeout)
 
     def _send_once(verify_tls: bool):
         if mode == "ssl":
@@ -148,27 +142,17 @@ def send_email(
             server_ctx = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=timeout)
 
         with server_ctx as server:
-            if SMTP_DEBUG:
-                server.set_debuglevel(2)
-            logging.debug("Connessione SMTP aperta verso %s:%s", SMTP_SERVER, SMTP_PORT)
-            ehlo_resp = server.ehlo()
-            logging.debug("EHLO response: %s", ehlo_resp)
+            server.ehlo()
 
             if mode == "starttls":
                 tls_context = _build_tls_context(verify_tls)
-                starttls_resp = server.starttls(context=tls_context)
-                logging.debug("STARTTLS response: %s", starttls_resp)
-                ehlo_tls_resp = server.ehlo()
-                logging.debug("EHLO post-STARTTLS response: %s", ehlo_tls_resp)
+                server.starttls(context=tls_context)
+                server.ehlo()
 
             if SMTP_USER and SMTP_PASSWORD:
-                logging.debug("Tentativo SMTP AUTH con utente: %s", SMTP_USER)
-                login_resp = server.login(SMTP_USER, SMTP_PASSWORD)
-                logging.debug("SMTP AUTH response: %s", login_resp)
+                server.login(SMTP_USER, SMTP_PASSWORD)
 
-            logging.debug("Invio messaggio al relay...")
             send_resp = server.send_message(msg, from_addr=envelope_from, to_addrs=rcpt)
-            logging.debug("send_message response (destinatari rifiutati): %s", send_resp)
             return send_resp
 
     try:
