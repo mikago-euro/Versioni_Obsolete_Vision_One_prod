@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-import os, mysql.connector, sys, smtplib, logging, ssl, json
+import os, mysql.connector, sys, smtplib, logging, ssl, json, ast
 from datetime import datetime
 from openpyxl import Workbook
 from mysql.connector import Error
 from email.message import EmailMessage
+from email.utils import parseaddr
 from dotenv import load_dotenv
 
 load_dotenv("/srv/Progetti_Pyhton/Versioni_Obsolete_Vision_One_prod/.Controllo_versioni.env")
@@ -61,6 +62,22 @@ def _resolve_smtp_mode() -> str:
     return "plain"
 
 
+
+
+def _unwrap_quoted_text(value: str) -> str:
+    """Rimuove un eventuale wrapper di apici esterni preservando il contenuto interno."""
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"\"", "'"}:
+        inner = text[1:-1].strip()
+        if inner:
+            return inner
+    return text
+
+
+def _is_valid_email_address(candidate: str) -> bool:
+    _, parsed = parseaddr(candidate)
+    return bool(parsed) and parsed == candidate and "@" in parsed
+
 def _parse_recipients(raw_recipients: list[str] | str | None) -> list[str]:
     """Normalizza i destinatari supportando CSV e array JSON-like."""
     if raw_recipients is None:
@@ -69,7 +86,7 @@ def _parse_recipients(raw_recipients: list[str] | str | None) -> list[str]:
     if isinstance(raw_recipients, list):
         candidates = raw_recipients
     else:
-        raw_text = str(raw_recipients).strip()
+        raw_text = _unwrap_quoted_text(str(raw_recipients).strip())
         if not raw_text:
             return []
 
@@ -89,9 +106,51 @@ def _parse_recipients(raw_recipients: list[str] | str | None) -> list[str]:
     cleaned: list[str] = []
     for item in candidates:
         recipient = str(item).strip().strip('\"').strip("'")
-        if recipient:
+        if not recipient:
+            continue
+        if _is_valid_email_address(recipient):
             cleaned.append(recipient)
+            continue
+        logging.warning("Destinatario non valido ignorato: %s", recipient)
     return cleaned
+
+
+def _resolve_recipients_for_customer(raw_recipients: str | None, customer_name: str) -> list[str]:
+    """Restituisce i destinatari per cliente da mapping (JSON/Python dict) o fallback statico."""
+    if raw_recipients is None:
+        return []
+
+    raw_text = _unwrap_quoted_text(str(raw_recipients).strip())
+    if not raw_text:
+        return []
+
+    def _extract_from_mapping(mapping: dict) -> list[str]:
+        customer_map = {str(key).strip().lower(): value for key, value in mapping.items()}
+        customer_recipients = customer_map.get(str(customer_name).strip().lower())
+        if customer_recipients is None:
+            return []
+        return _parse_recipients(customer_recipients)
+
+    is_mapping_like = raw_text.startswith("{") and raw_text.endswith("}")
+
+    try:
+        parsed = json.loads(raw_text)
+        if isinstance(parsed, dict):
+            return _extract_from_mapping(parsed)
+    except json.JSONDecodeError:
+        if is_mapping_like:
+            try:
+                parsed_literal = ast.literal_eval(raw_text)
+                if isinstance(parsed_literal, dict):
+                    return _extract_from_mapping(parsed_literal)
+            except (ValueError, SyntaxError):
+                logging.warning(
+                    "DESTINATARI sembra una mappa cliente ma non è valida (JSON/Python dict). Invio saltato per %s.",
+                    customer_name,
+                )
+                return []
+
+    return _parse_recipients(raw_text)
 
 
 def send_email(
@@ -281,7 +340,13 @@ def main():
             f"in allegato trovi il report versioni per il cliente {customer_name}.\n\n"
             f"Ciao"
         )
-        destinatari_list = _parse_recipients(DESTINATARI)
+        destinatari_list = _resolve_recipients_for_customer(DESTINATARI, customer_name)
+        if not destinatari_list:
+            logging.warning(
+                "Nessun destinatario configurato per il cliente %s. Invio email saltato.",
+                customer_name,
+            )
+            continue
         try:
             sent = send_email(
                 email_subject,
