@@ -94,6 +94,30 @@ def _parse_recipients(raw_recipients: list[str] | str | None) -> list[str]:
     return cleaned
 
 
+def _resolve_recipients_for_customer(raw_recipients: str | None, customer_name: str) -> list[str]:
+    """Restituisce i destinatari per cliente da JSON object o fallback statico."""
+    if raw_recipients is None:
+        return []
+
+    raw_text = str(raw_recipients).strip()
+    if not raw_text:
+        return []
+
+    if raw_text.startswith("{") and raw_text.endswith("}"):
+        try:
+            parsed = json.loads(raw_text)
+            if isinstance(parsed, dict):
+                customer_map = {str(key).strip().lower(): value for key, value in parsed.items()}
+                customer_recipients = customer_map.get(str(customer_name).strip().lower())
+                if customer_recipients is None:
+                    return []
+                return _parse_recipients(customer_recipients)
+        except json.JSONDecodeError:
+            logging.warning("DESTINATARI non contiene JSON valido, uso il parsing statico")
+
+    return _parse_recipients(raw_text)
+
+
 def send_email(
     subject: str,
     body_text: str,
@@ -281,7 +305,13 @@ def main():
             f"in allegato trovi il report versioni per il cliente {customer_name}.\n\n"
             f"Ciao"
         )
-        destinatari_list = _parse_recipients(DESTINATARI)
+        destinatari_list = _resolve_recipients_for_customer(DESTINATARI, customer_name)
+        if not destinatari_list:
+            logging.warning(
+                "Nessun destinatario configurato per il cliente %s. Invio email saltato.",
+                customer_name,
+            )
+            continue
         try:
             sent = send_email(
                 email_subject,
