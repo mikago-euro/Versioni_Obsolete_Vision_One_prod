@@ -335,11 +335,18 @@ def main():
         print(f"File Excel creato per {customer_name}: {output_file}")
 
         email_subject = f"Report versioni {customer_name}"
-        email_body = (
-            f"Ciao,\n\n"
-            f"in allegato trovi il report versioni per il cliente {customer_name}.\n\n"
-            f"Ciao"
-        )
+        if details_rows:
+            email_body = (
+                f"Gentile Cliente,\n\n"
+                f"in allegato trova il report versioni.\n\n"
+                f"Cordiali saluti"
+            )
+        else:
+            email_body = (
+                f"Gentile Cliente,\n\n"
+                f"La informiamo che non risultano Client non aggiornati.\n\n"
+                f"Cordiali saluti"
+            )
         destinatari_list = _resolve_recipients_for_customer(DESTINATARI, customer_name)
         if not destinatari_list:
             logging.warning(
