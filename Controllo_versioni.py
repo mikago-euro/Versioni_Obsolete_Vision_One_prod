@@ -2,6 +2,7 @@
 import os, mysql.connector, sys, smtplib, logging, ssl, json, ast
 from datetime import datetime
 from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
 from mysql.connector import Error
 from email.message import EmailMessage
 from email.utils import parseaddr
@@ -268,6 +269,7 @@ def main():
     
     customers_query = "SELECT customer_name, api_url FROM customers"
     cursor = conn.cursor()
+    print(f"customers_query: {customers_query}")
     cursor.execute(customers_query)
     customers = cursor.fetchall()
     cursor.close()
@@ -285,6 +287,7 @@ def main():
         agents_query = (
             "SELECT DISTINCT clientProgram FROM agents WHERE api_url = %s ORDER BY clientProgram DESC"
         )
+        print(f"agents_query: {agents_query} params: {(api_key,)}")
         cursor.execute(agents_query, (api_key,))
         rows = cursor.fetchall()
         cursor.close()
@@ -298,17 +301,24 @@ def main():
             return tuple(int(part) for part in parts)
 
         client_programs = sorted({row[0] for row in rows if row[0] is not None}, key=version_key)
+        print(f"Versioni trovate per {customer_name}: {', '.join(client_programs)}")
         highest_three_client_programs = client_programs[-3:] if len(client_programs) >= 3 else client_programs
+        print(
+            f"Versioni escluse per {customer_name}: "
+            f"{', '.join(highest_three_client_programs) if highest_three_client_programs else 'Nessuna'}"
+        )
         placeholders = ", ".join(["%s"] * len(highest_three_client_programs))
         exclusions_clause = f"AND clientProgram NOT IN ({placeholders})" if placeholders else ""
         details_query = (
             "SELECT endpointHost, endpointIP, logonUser, platform, clientProgram, lastConnected "
             "FROM agents "
-            f"WHERE api_url = %s AND clientProgram IS NOT NULL {exclusions_clause}"
+            f"WHERE api_url = %s AND clientProgram IS NOT NULL "
+            f"AND (platform IS NULL OR platform NOT LIKE 'Mac%') {exclusions_clause}"
         )
 
         cursor = conn.cursor()
         params = (api_key, *highest_three_client_programs)
+        print(f"details_query: {details_query} params: {params}")
         cursor.execute(details_query, params)
         details_rows = cursor.fetchall()
         cursor.close()
@@ -329,6 +339,14 @@ def main():
         for row in details_rows:
             sheet.append([customer_name, *row])
 
+        for col_idx, column_cells in enumerate(sheet.columns, start=1):
+            max_length = 0
+            for cell in column_cells:
+                cell_value = "" if cell.value is None else str(cell.value)
+                max_length = max(max_length, len(cell_value))
+
+            sheet.column_dimensions[get_column_letter(col_idx)].width = max_length + 2
+
         safe_customer_name = safe_filename(str(customer_name)) or "cliente_senza_nome"
         output_file = f"client_data_{safe_customer_name}_{timestamp}.xlsx"
         workbook.save(output_file)
@@ -336,9 +354,9 @@ def main():
 
         email_subject = f"Report versioni {customer_name}"
         email_body = (
-            f"Ciao,\n\n"
-            f"in allegato trovi il report versioni per il cliente {customer_name}.\n\n"
-            f"Ciao"
+            f"Buongiorno,\n\n"
+            f"in allegato inviamo la lista dei client sui quali risulta installata una versione del programma non aggiornata e per i quali è necessaria una verifica manuale.\n\n"
+            f"Il nostro Operation Center resta a disposizione per supportarvi nelle attività, qualora fosse necessario."
         )
         destinatari_list = _resolve_recipients_for_customer(DESTINATARI, customer_name)
         if not destinatari_list:
