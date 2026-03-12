@@ -354,9 +354,10 @@ def main():
 
         email_subject = f"Report versioni {customer_name}"
         email_body = (
-            f"Buongiorno,\n\n"
-            f"in allegato inviamo la lista dei client sui quali risulta installata una versione del programma non aggiornata e per i quali è necessaria una verifica manuale.\n\n"
-            f"Il nostro Operation Center resta a disposizione per supportarvi nelle attività, qualora fosse necessario."
+            f"Gentile Cliente,\n\n"
+            f"in allegato trasmettiamo l’elenco delle postazioni dove risulta installata una versione del programma non aggiornata e per le quali è pertanto necessaria una verifica manuale.\n\n"
+            f"Il nostro Operation Center è a disposizione per fornire supporto per risolvere il problema. Vi chiediamo di contattarci per concordare le necessarie sessioni di verifica/risoluzione.\n\n"
+            f"Cordiali saluti,\n\n"
         )
         destinatari_list = _resolve_recipients_for_customer(DESTINATARI, customer_name)
         if not destinatari_list:
