@@ -159,6 +159,7 @@ def send_email(
     body_text: str,
     *,
     rcpt: list[str] | str,
+    bcc: list[str] | str | None = None,
     body_html: str | None = None,
     attachments: list[str] | None = None,
     timeout: int = SMTP_TIMEOUT,
@@ -166,21 +167,25 @@ def send_email(
     """Invia una email e ritorna True se il relay accetta almeno un destinatario."""
     subject = subject.strip()
     rcpt = _parse_recipients(rcpt)
+    bcc = _parse_recipients(bcc) if bcc else []
+
     if not SMTP_SERVER or not SMTP_PORT:
         raise ValueError("SMTP_SERVER/SMTP_PORT non configurati")
     if not EMAIL_FROM:
         raise ValueError("EMAIL_FROM non configurato")
-    if not rcpt:
+    if not rcpt and not bcc:
         raise ValueError("Nessun destinatario valido configurato per l'invio email")
 
     msg = EmailMessage()
     msg["From"] = EMAIL_FROM
-    msg["To"] = ", ".join(rcpt)
+    if rcpt:
+        msg["To"] = ", ".join(rcpt)
     msg["Subject"] = subject
 
     msg.set_content(body_text, subtype="plain", charset="utf-8")
     if body_html:
         msg.add_alternative(body_html, subtype="html")
+
     if attachments:
         for attachment_path in attachments:
             with open(attachment_path, "rb") as attachment_file:
@@ -195,11 +200,14 @@ def send_email(
 
     mode = _resolve_smtp_mode()
     envelope_from = SMTP_ENVELOPE_FROM or EMAIL_FROM
+    all_recipients = rcpt + bcc
 
     def _send_once(verify_tls: bool):
         if mode == "ssl":
             context = _build_tls_context(verify_tls)
-            server_ctx = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=timeout, context=context)
+            server_ctx = smtplib.SMTP_SSL(
+                SMTP_SERVER, SMTP_PORT, timeout=timeout, context=context
+            )
         else:
             server_ctx = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=timeout)
 
@@ -214,7 +222,11 @@ def send_email(
             if SMTP_USER and SMTP_PASSWORD:
                 server.login(SMTP_USER, SMTP_PASSWORD)
 
-            send_resp = server.send_message(msg, from_addr=envelope_from, to_addrs=rcpt)
+            send_resp = server.send_message(
+                msg,
+                from_addr=envelope_from,
+                to_addrs=all_recipients,
+            )
             return send_resp
 
     try:
@@ -248,7 +260,7 @@ def send_email(
             )
         return False
 
-    logging.info("E-mail accettata dal relay per destinatari: %s", ", ".join(rcpt))
+    logging.info("E-mail accettata dal relay per destinatari: %s", ", ".join(all_recipients))
     return True
 
 def connect_to_mysql():
