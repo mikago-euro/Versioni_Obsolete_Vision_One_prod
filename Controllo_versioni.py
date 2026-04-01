@@ -25,6 +25,7 @@ SMTP_CA_FILE   = (os.getenv("SMTP_CA_FILE") or "/usr/local/share/ca-certificates
 SMTP_ENVELOPE_FROM = (os.getenv("SMTP_ENVELOPE_FROM") or "").strip()
 EMAIL_FROM     = os.getenv("EMAIL_FROM")
 DESTINATARI    = os.getenv("EMAIL_TO_JSON")
+CCN_ADDRESS = os.getenv("CCN_ADDRESS")
 DBUSER=os.getenv("USER")
 DBNAME=os.getenv("DATABASE")
 
@@ -164,10 +165,13 @@ def send_email(
     attachments: list[str] | None = None,
     timeout: int = SMTP_TIMEOUT,
 ):
-    """Invia una email e ritorna True se il relay accetta almeno un destinatario."""
     subject = subject.strip()
-    rcpt = _parse_recipients(rcpt)
-    bcc = _parse_recipients(bcc) if bcc else []
+
+    rcpt = list(dict.fromkeys(_parse_recipients(rcpt)))
+    bcc = list(dict.fromkeys(_parse_recipients(bcc))) if bcc else []
+
+    # tolgo dal BCC eventuali indirizzi già presenti nel TO
+    bcc = [addr for addr in bcc if addr not in rcpt]
 
     if not SMTP_SERVER or not SMTP_PORT:
         raise ValueError("SMTP_SERVER/SMTP_PORT non configurati")
@@ -180,9 +184,12 @@ def send_email(
     msg["From"] = EMAIL_FROM
     if rcpt:
         msg["To"] = ", ".join(rcpt)
+    else:
+        msg["To"] = "undisclosed-recipients:;"
     msg["Subject"] = subject
 
     msg.set_content(body_text, subtype="plain", charset="utf-8")
+
     if body_html:
         msg.add_alternative(body_html, subtype="html")
 
@@ -222,46 +229,12 @@ def send_email(
             if SMTP_USER and SMTP_PASSWORD:
                 server.login(SMTP_USER, SMTP_PASSWORD)
 
-            send_resp = server.send_message(
+            return server.send_message(
                 msg,
                 from_addr=envelope_from,
                 to_addrs=all_recipients,
             )
-            return send_resp
 
-    try:
-        refused_recipients = _send_once(SMTP_VERIFY_TLS)
-    except ssl.SSLError:
-        if not SMTP_VERIFY_TLS or not SMTP_ALLOW_INSECURE_FALLBACK:
-            logging.exception("Errore SSL/TLS durante invio SMTP")
-            raise
-        logging.warning("Errore verifica TLS; ritento con verifica disabilitata")
-        refused_recipients = _send_once(False)
-    except Exception:
-        logging.exception("Errore SMTP non gestito durante invio")
-        raise
-
-    if refused_recipients:
-        logging.error("Destinatari rifiutati dal relay: %s", refused_recipients)
-        for recipient, smtp_error in refused_recipients.items():
-            try:
-                smtp_code, smtp_message = smtp_error
-            except Exception:
-                smtp_code, smtp_message = "?", smtp_error
-
-            if isinstance(smtp_message, bytes):
-                smtp_message = smtp_message.decode("utf-8", errors="replace")
-
-            logging.error(
-                "Dettaglio destinatario rifiutato: %s -> codice=%s messaggio=%s",
-                recipient,
-                smtp_code,
-                smtp_message,
-            )
-        return False
-
-    logging.info("E-mail accettata dal relay per destinatari: %s", ", ".join(all_recipients))
-    return True
 
 def connect_to_mysql():
     """Esegue la connessione al database MySQL e restituisce l'oggetto connection."""
@@ -372,6 +345,7 @@ def main():
             f"Cordiali saluti,\n\n"
         )
         destinatari_list = _resolve_recipients_for_customer(DESTINATARI, customer_name)
+        bcc_list = _parse_recipients(CCN_ADDRESS)
         if not destinatari_list:
             logging.warning(
                 "Nessun destinatario configurato per il cliente %s. Invio email saltato.",
@@ -382,7 +356,8 @@ def main():
             sent = send_email(
                 email_subject,
                 email_body,
-                rcpt=destinatari_list,
+                rcpt = destinatari_list,
+                bcc = bcc_list,
                 attachments=[output_file],
             )
             if not sent:
