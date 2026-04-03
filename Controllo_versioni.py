@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, mysql.connector, sys, smtplib, logging, ssl, json, ast
+import os, mysql.connector, sys, smtplib, logging, ssl, json, ast, datetime
 from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
@@ -62,8 +62,6 @@ def _resolve_smtp_mode() -> str:
     if SMTP_PORT in {587, 25}:
         return "starttls" if SMTP_STARTTLS else "plain"
     return "plain"
-
-
 
 
 def _unwrap_quoted_text(value: str) -> str:
@@ -252,6 +250,16 @@ def main():
     if not conn:
         sys.exit(1)
     
+    start_date = datetime.date(2026, 4, 10)  # prossimo venerdì (esempio)
+    today = datetime.date.today()
+
+    weeks = (today - start_date).days // 7
+
+    if weeks % 2 == 0:
+        print("Eseguo script")
+    else:
+        exit
+        
     customers_query = "SELECT customer_name, api_url FROM customers"
     cursor = conn.cursor()
     print(f"customers_query: {customers_query}")
