@@ -250,16 +250,21 @@ def main():
     if not conn:
         sys.exit(1)
     
-    start_date = datetime.date(2026, 4, 10)  # prossimo venerdì (esempio)
+    start_date = datetime.date(2026, 4, 10) 
     today = datetime.date.today()
+
+    # Evita problemi prima della data iniziale
+    if today < start_date:
+        return
+
+    if today.weekday() != 4:  # 4 = venerdì
+        return
 
     weeks = (today - start_date).days // 7
 
-    if weeks % 2 == 0:
-        print("Eseguo script")
-    else:
-        exit
-        
+    if weeks % 2 != 0:
+        return  # settimana da saltare
+
     customers_query = "SELECT customer_name, api_url FROM customers"
     cursor = conn.cursor()
     print(f"customers_query: {customers_query}")
