@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import os, mysql.connector, sys, smtplib, logging, ssl, json, ast, datetime
-from datetime import datetime
+from datetime import datetime, date
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 from mysql.connector import Error
@@ -250,8 +250,8 @@ def main():
     if not conn:
         sys.exit(1)
     
-    start_date = datetime.date(2026, 4, 10) 
-    today = datetime.date.today()
+    start_date = date(2026, 4, 10)
+    today = date.today()
 
     # Evita problemi prima della data iniziale
     if today < start_date:
@@ -279,11 +279,64 @@ def main():
     def safe_filename(value):
         return "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in value).strip("_")
 
+    def version_key(version):
+        """Chiave di ordinamento numerico per versioni tipo 14.0.1234."""
+        parts = str(version).strip().split(".")
+        return tuple(int(part) for part in parts)
+
+    def collect_numeric_versions(rows, context):
+        """Raccoglie versioni clientProgram distinte, ignorando valori vuoti/non numerici."""
+        versions = set()
+        for row in rows:
+            version = row[0]
+            if version is None:
+                continue
+            version = str(version).strip()
+            if not version:
+                continue
+            try:
+                version_key(version)
+            except ValueError:
+                logging.warning(
+                    "Versione clientProgram non numerica ignorata (%s): %s",
+                    context,
+                    version,
+                )
+                continue
+            versions.add(version)
+        return sorted(versions, key=version_key)
+
+    # Calcolo globale: le 3 versioni più recenti sono identificate una sola volta
+    # considerando tutti i clienti presenti nella tabella customers.
+    all_versions_query = (
+        "SELECT DISTINCT a.clientProgram "
+        "FROM agents a "
+        "JOIN customers c ON c.api_url = a.api_url "
+        "WHERE a.clientProgram IS NOT NULL"
+    )
+    cursor = conn.cursor()
+    print(f"all_versions_query: {all_versions_query}")
+    cursor.execute(all_versions_query)
+    all_version_rows = cursor.fetchall()
+    cursor.close()
+
+    all_client_programs = collect_numeric_versions(all_version_rows, "calcolo globale")
+    if not all_client_programs:
+        print("Nessuna versione clientProgram valida trovata nella tabella agents.")
+        return
+
+    highest_three_client_programs = all_client_programs[-3:] if len(all_client_programs) >= 3 else all_client_programs
+    print(f"Versioni globali trovate: {', '.join(all_client_programs)}")
+    print(
+        "Versioni globali escluse dai report: "
+        f"{', '.join(highest_three_client_programs) if highest_three_client_programs else 'Nessuna'}"
+    )
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     for customer_name, api_key in customers:
         cursor = conn.cursor()
         agents_query = (
-            "SELECT DISTINCT clientProgram FROM agents WHERE api_url = %s ORDER BY clientProgram DESC"
+            "SELECT DISTINCT clientProgram FROM agents WHERE api_url = %s"
         )
         print(f"agents_query: {agents_query} params: {(api_key,)}")
         cursor.execute(agents_query, (api_key,))
@@ -294,15 +347,13 @@ def main():
             print(f"Nessun agent trovato per il cliente {customer_name}.")
             continue
 
-        def version_key(version):
-            parts = version.split(".")
-            return tuple(int(part) for part in parts)
-
-        client_programs = sorted({row[0] for row in rows if row[0] is not None}, key=version_key)
-        print(f"Versioni trovate per {customer_name}: {', '.join(client_programs)}")
-        highest_three_client_programs = client_programs[-3:] if len(client_programs) >= 3 else client_programs
+        client_programs = collect_numeric_versions(rows, str(customer_name))
         print(
-            f"Versioni escluse per {customer_name}: "
+            f"Versioni trovate per {customer_name}: "
+            f"{', '.join(client_programs) if client_programs else 'Nessuna versione valida'}"
+        )
+        print(
+            f"Versioni escluse per {customer_name} secondo regola globale: "
             f"{', '.join(highest_three_client_programs) if highest_three_client_programs else 'Nessuna'}"
         )
         placeholders = ", ".join(["%s"] * len(highest_three_client_programs))
