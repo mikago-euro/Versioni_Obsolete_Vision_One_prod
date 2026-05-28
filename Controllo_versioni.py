@@ -7,6 +7,7 @@ import json
 import ast
 import smtplib
 import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, date
 from typing import Any, Dict, List, Optional, Union
 
@@ -29,12 +30,69 @@ ENV_FILE = os.path.join(PROJECT_DIR, ".Controllo_versioni.env")
 # override=True serve per evitare conflitti con variabili di sistema come USER
 load_dotenv(ENV_FILE, override=True)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-    stream=sys.stdout,
-    force=True,
-)
+# =============================================================================
+# CONFIGURAZIONE LOGGING
+# =============================================================================
+
+# Percorso del file di log persistente (sovrascrivibile da .env). Conserva lo
+# storico delle esecuzioni per la verifica a posteriori.
+LOG_FILE = (
+    os.getenv("LOG_FILE")
+    or "/var/log/controllo_versioni_apex_one.log"
+).strip()
+
+# Rotazione del file di log: dimensione massima del singolo file e numero di
+# file storici da mantenere.
+LOG_MAX_BYTES = int((os.getenv("LOG_MAX_BYTES") or str(5 * 1024 * 1024)).strip())
+LOG_BACKUP_COUNT = int((os.getenv("LOG_BACKUP_COUNT") or "5").strip())
+
+
+def _setup_logging() -> None:
+    """
+    Configura il logging su file con rotazione e, in parallelo, su stdout.
+
+    Tutti i messaggi vengono scritti in modo persistente nel file di log per
+    consentire la verifica a posteriori delle esecuzioni schedulate. Se il file
+    di log non e' scrivibile, lo script prosegue loggando solo su stdout.
+    """
+    log_format = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+
+    # Rimuove eventuali handler preesistenti (equivalente di force=True)
+    for handler in list(root_logger.handlers):
+        root_logger.removeHandler(handler)
+
+    # Handler su stdout: utile per esecuzioni manuali e per la mail di cron
+    stream_handler = logging.StreamHandler(stream=sys.stdout)
+    stream_handler.setFormatter(log_format)
+    root_logger.addHandler(stream_handler)
+
+    # Handler su file con rotazione per la tracciabilita' storica
+    try:
+        log_dir = os.path.dirname(LOG_FILE)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+
+        file_handler = RotatingFileHandler(
+            LOG_FILE,
+            maxBytes=LOG_MAX_BYTES,
+            backupCount=LOG_BACKUP_COUNT,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(log_format)
+        root_logger.addHandler(file_handler)
+    except OSError as exc:
+        logging.warning(
+            "Impossibile aprire il file di log %s: %s. "
+            "Il logging proseguira' solo su stdout.",
+            LOG_FILE,
+            exc,
+        )
+
+
+_setup_logging()
 
 # =============================================================================
 # VARIABILI DI AMBIENTE
