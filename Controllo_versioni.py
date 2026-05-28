@@ -770,25 +770,8 @@ def main():
             details_rows = cursor.fetchall()
             cursor.close()
 
-            output_file = create_excel_report(
-                customer_name=customer_name,
-                details_rows=details_rows,
-                timestamp=timestamp,
-            )
-
-            email_subject = f"Report versioni {customer_name}"
-
-            email_body = (
-                "Gentile Cliente,\n\n"
-                "in allegato trasmettiamo l’elenco delle postazioni dove risulta "
-                "installata una versione del programma non aggiornata e per le quali "
-                "è pertanto necessaria una verifica manuale.\n\n"
-                "Il nostro Operation Center è a disposizione per fornire supporto "
-                "per risolvere il problema. Vi chiediamo di contattarci per concordare "
-                "le necessarie sessioni di verifica/risoluzione.\n\n"
-                "Cordiali saluti,\n\n"
-            )
-
+            # Risoluzione destinatari PRIMA della generazione del report,
+            # cosi da non creare file Excel inutili per clienti senza referente.
             destinatari_list = _resolve_recipients_for_customer(
                 referenti,
                 str(customer_name),
@@ -804,13 +787,60 @@ def main():
                 )
                 continue
 
+            if details_rows:
+                # Sono presenti postazioni non aggiornate: report Excel + allegato.
+                output_file = create_excel_report(
+                    customer_name=customer_name,
+                    details_rows=details_rows,
+                    timestamp=timestamp,
+                )
+
+                email_subject = f"Report versioni {customer_name}"
+
+                email_body = (
+                    "Gentile Cliente,\n\n"
+                    "in allegato trasmettiamo l’elenco delle postazioni dove risulta "
+                    "installata una versione del programma non aggiornata e per le quali "
+                    "è pertanto necessaria una verifica manuale.\n\n"
+                    "Il nostro Operation Center è a disposizione per fornire supporto "
+                    "per risolvere il problema. Vi chiediamo di contattarci per concordare "
+                    "le necessarie sessioni di verifica/risoluzione.\n\n"
+                    "Cordiali saluti,\n\n"
+                )
+
+                attachments = [output_file]
+
+            else:
+                # Nessuna postazione non aggiornata: comunicazione di esito positivo.
+                logging.info(
+                    "Nessuna postazione non aggiornata per %s: "
+                    "invio comunicazione di esito positivo.",
+                    customer_name,
+                )
+
+                email_subject = (
+                    f"Report versioni {customer_name} - "
+                    "Nessuna postazione da aggiornare"
+                )
+
+                email_body = (
+                    "Gentile Cliente,\n\n"
+                    "a seguito del controllo periodico delle versioni del programma "
+                    "client installato sulle Vostre postazioni, Vi informiamo che "
+                    "tutte le postazioni monitorate risultano aggiornate e non è "
+                    "pertanto necessario alcun intervento.\n\n"
+                    "Cordiali saluti,\n\n"
+                )
+
+                attachments = None
+
             try:
                 refused = send_email(
                     email_subject,
                     email_body,
                     rcpt=destinatari_list,
                     bcc=bcc_list,
-                    attachments=[output_file],
+                    attachments=attachments,
                 )
 
                 if refused:
